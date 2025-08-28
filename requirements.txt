@@ -5,3 +5,4 @@ httpx
 zeep
 requests
 python-dotenv
+requests-ntlm

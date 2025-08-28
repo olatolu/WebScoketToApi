@@ -16,6 +16,7 @@ from zeep import Client, Settings
 from zeep.transports import Transport
 import requests
 from requests.auth import HTTPBasicAuth
+from requests_ntlm import HttpNtlmAuth
 
 # -------------------------------------------------
 # App & logging
@@ -28,6 +29,7 @@ logger = logging.getLogger("uvicorn.error")
 # -------------------------------------------------
 # Platform API (preprocessing like in webSocket.html)
 PLATFORM_API_URL = os.getenv("PLATFORM_API_URL", "https://api.overseetracking.com:9090/WebProcessorApi.ashx")
+SOAP_ENDPOINT = os.getenv("SOAP_ENDPOINT", "http://aig-navdb18-064.g.group:8447/ANRML-Live/WS/ANRML/Page/WB_Tracking_API?wsdl")
 PLATFORM_USERNAME = os.getenv("PLATFORM_USERNAME", 'ANRMLOG1')
 PLATFORM_PASSWORD = os.getenv("PLATFORM_PASSWORD", '456789')
 LANGUAGE_TYPE = os.getenv("PLATFORM_LANGUAGE_TYPE", "2B72ABC6-19D7-4653-AAEE-0BE542026D46")
@@ -35,10 +37,10 @@ USE_HTTP_WS = os.getenv("USE_HTTP_WS", "false").lower() == "true"  # if true -> 
 VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 
 # SOAP
-SOAP_WSDL = os.getenv(
-    "SOAP_WSDL",
-    "http://aig-navdb18-064.g.group:8447/ANRML-Live/WS/ANRML/Page/WB_Tracking_API?wsdl",
-)
+# Use absolute path to WSDL file in project root
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+SOAP_WSDL = f"file://{os.path.join(PROJECT_ROOT, 'WB_Tracking_API.xml')}"
+
 SOAP_BASIC_USER = os.getenv("SOAP_BASIC_USER", "")
 SOAP_BASIC_PASS = os.getenv("SOAP_BASIC_PASS", "")
 
@@ -62,13 +64,24 @@ STATE = State()
 # -------------------------------------------------
 # SOAP client (zeep)
 # -------------------------------------------------
-def build_soap_client() -> Client:
+def build_soap_client():
     session = requests.Session()
     if SOAP_BASIC_USER and SOAP_BASIC_PASS:
-        session.auth = HTTPBasicAuth(SOAP_BASIC_USER, SOAP_BASIC_PASS)
+        # session.auth = HTTPBasicAuth(SOAP_BASIC_USER, SOAP_BASIC_PASS)
+        session.auth = HttpNtlmAuth(SOAP_BASIC_USER, SOAP_BASIC_PASS)
+
     transport = Transport(session=session)
     settings = Settings(strict=False, xml_huge_tree=True)
-    return Client(wsdl=SOAP_WSDL, transport=transport, settings=settings)
+
+    base_client = Client(wsdl=SOAP_WSDL, transport=transport, settings=settings)
+
+    # Debug: print available bindings
+    logger.info(f"Available bindings: {list(base_client.wsdl.bindings.keys())}")
+
+    return base_client.create_service(
+        "{urn:microsoft-dynamics-schemas/page/wb_tracking_api}WB_Tracking_API_Binding",
+        SOAP_ENDPOINT,
+    )
 
 SOAP_CLIENT = build_soap_client()
 
@@ -208,8 +221,8 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
     Map incoming fields to WB_Tracking_API.Create payload from WSDL.
     """
     alarm_type = str(payload_in.get("AlarmType", "")).strip()
-    # if alarm_type not in ALLOWED_ALARMS:
-    #     return
+    if alarm_type not in ALLOWED_ALARMS:
+        return
 
     # Build payload matching the WSDL schema.
     # NOTE on "Longitude_Latitude": The WSDL exposes a *single* decimal field.
@@ -231,6 +244,7 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
         # Include original Arguments plus Latitude so nothing is lost
         "Arguments": json.dumps({
             "Arguments": payload_in.get("Arguments"),
+            "Longitude": payload_in.get("Longitude"),
             "Latitude": payload_in.get("Latitude"),
             "OtherValues": payload_in.get("OtherValues")
         }, ensure_ascii=False),
@@ -239,10 +253,12 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
     # Offload blocking SOAP I/O to a thread so we don't block the event loop.
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(None, lambda: SOAP_CLIENT.service.Create(WB_Tracking_API=payload))
+        result = await loop.run_in_executor(None, lambda: SOAP_CLIENT.Create(WB_Tracking_API=payload))
         logger.info(f"SOAP Create OK: {result}")
+        logger.info(f"SOAP Create OK: {payload}")
     except Exception as e:
         logger.error(f"SOAP Create failed: {e}")
+        logger.error(f"SOAP Create failed: {payload}")
 
 # -------------------------------------------------
 # WebSocket handling (multiple endpoints from Transfer[])
@@ -308,18 +324,17 @@ async def run_ws_endpoint(endpoint: Dict[str, Any]) -> None:
                                 continue
                             try:
                                 data = json.loads(chunk)
+                                alarm_type = str(data.get("AlarmType", "")).strip()
 
-                                try:
-                                    data = json.loads(chunk)
+                                if alarm_type in ALLOWED_ALARMS:
+                                    # ✅ Only log allowed alarms
                                     logger.info(
-                                        f"WS DATA [{host}:{port}]: {json.dumps(data)[:500]}")  # log first 500 chars
+                                        f"WS ALARM [{host}:{port}]: {json.dumps(data)[:500]}"
+                                    )
+                                    # ✅ Only queue allowed alarms
                                     await push_to_soap(data)
-                                except Exception as e:
-                                    logger.error(f"JSON/process error: {e} (chunk={chunk[:200]})")
-                                # Forward matching alarms to SOAP
-                                await push_to_soap(data)
                             except Exception as e:
-                                logger.error(f"JSON/process error: {e}")
+                                logger.error(f"JSON/process error: {e} (chunk={chunk[:200]})")
                 finally:
                     hb_task.cancel()
 
