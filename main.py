@@ -231,7 +231,8 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
     payload = {
         "System_No": payload_in.get("SystemNo"),
         "Date_x0026_Time": _to_xsd_datetime(payload_in.get("DateTime")),
-        "Longitude_Latitude": _to_decimal(payload_in.get("Longitude")),  # single decimal field in WSDL
+        "Latitude": _to_decimal(payload_in.get("Longitude")),  # single decimal field in WSDL
+        "Longitude": _to_decimal(payload_in.get("Latitude")),  # single decimal field in WSDL
         "Velocity": _to_decimal(payload_in.get("Velocity")),
         "Angle": _to_decimal(payload_in.get("Angle")),
         "Altitude": _to_decimal(payload_in.get("Altitude")),
