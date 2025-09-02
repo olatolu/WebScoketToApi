@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from App import state, services, config
 
 router = APIRouter()
@@ -32,3 +32,11 @@ async def geocode(lat: float, lon: float):
     if not address:
         return {"error": "Address not found"}
     return {"lat": lat, "lon": lon, "address": address}
+
+@router.get("/geofence-name")
+async def geofence_name(zone_id: str = Query(..., description="Geofence ZoneID")):
+    """
+    Get the geofence (SafeZone) name by ZoneID.
+    """
+    name = await services.get_geofence_name(zone_id)
+    return {"ZoneID": zone_id, "ZoneName": name}

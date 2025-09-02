@@ -64,11 +64,21 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
     if alarm_type not in config.ALLOWED_ALARMS:
         return
 
+    alarm_type = str(payload_in.get("AlarmType", "")).strip()
+    system_no = payload_in.get("SystemNo")
+    lat, lon = payload_in.get("Latitude"), payload_in.get("Longitude")
+
+    # Enriched fields from utility functions
+    vehicle_no = await get_vehicle_no(system_no) if system_no else None
+    current_location = await get_current_location(lat, lon)
+    alarm_name = await get_alarm_name(alarm_type)
+    geo_fence_name = await get_geofence_name(payload_in.get("GeoFenceID"))
+
     payload = {
-        "System_No": payload_in.get("SystemNo"),
+        "System_No": system_no,
         "Date_x0026_Time": to_xsd_datetime(payload_in.get("DateTime")),
-        "Latitude": to_decimal(payload_in.get("Longitude")),
-        "Longitude": to_decimal(payload_in.get("Latitude")),
+        "Latitude": to_decimal(payload_in.get("Latitude")),
+        "Longitude": to_decimal(payload_in.get("Longitude")),
         "Velocity": to_decimal(payload_in.get("Velocity")),
         "Angle": to_decimal(payload_in.get("Angle")),
         "Altitude": to_decimal(payload_in.get("Altitude")),
@@ -84,6 +94,11 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
             "Latitude": payload_in.get("Latitude"),
             "OtherValues": payload_in.get("OtherValues"),
         }, ensure_ascii=False),
+        # Enriched from utility function
+        "Vehicle_No": vehicle_no,
+        "Current_Location": current_location,
+        "Geo_fence_Name": geo_fence_name,
+        "Alarm_Name": alarm_name,
     }
 
     loop = asyncio.get_running_loop()
@@ -144,3 +159,57 @@ async def get_alarm_type_by_id(alarm_type_id: str) -> Optional[str]:
             return "Deviation Alarm" if name == "Yaw Alarm" else name
 
     return None
+
+# -------------------------------------------------
+# Geofence lookup
+# -------------------------------------------------
+async def get_geofence_name(zone_id: str) -> Optional[str]:
+    """
+    Utility: return ZoneName for a given ZoneID.
+    Refresh cache if not found.
+    """
+    for zone in state.STATE.geofences:
+        if str(zone.get("ZoneID")) == str(zone_id):
+            return zone.get("ZoneName")
+
+    # Not found → refresh SafeZones
+    async with httpx.AsyncClient(verify=config.VERIFY_SSL, timeout=httpx.Timeout(30.0)) as client:
+        await platform.get_geofences(client)
+
+    for zone in state.STATE.geofences:
+        if str(zone.get("ZoneID")) == str(zone_id):
+            return zone.get("ZoneName")
+
+    return None
+
+async def get_vehicle_no(system_no: str) -> Optional[str]:
+    """
+    Utility: return Vehicle_No (the Name attribute) for a given SystemNo.
+    Refresh vehicle data if not cached.
+    """
+    vehicle = await get_vehicle_by_system_no(system_no)
+    if vehicle:
+        return vehicle.get("Name")
+    return None
+
+async def get_current_location(lat: Any, lon: Any) -> Optional[str]:
+    """
+    Utility: reverse geocode latitude/longitude into a human-readable address.
+    Returns None if invalid or reverse geocode fails.
+    """
+    if not lat or not lon:
+        return None
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except Exception:
+        return None
+    return await reverse_geocode(lat_f, lon_f)
+
+async def get_alarm_name(alarm_type_id: str) -> Optional[str]:
+    """
+    Utility: return Alarm_Name by looking up AlarmTypeID.
+    Refresh cache if not found.
+    """
+    if not alarm_type_id:
+        return None
+    return await get_alarm_type_by_id(alarm_type_id)

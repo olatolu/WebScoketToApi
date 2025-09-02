@@ -38,3 +38,29 @@ async def get_alarm_types(client: httpx.AsyncClient):
     if str(data.get("State")) != "0":
         raise RuntimeError(f"Get AlarmType failed: {data}")
     state.STATE.alarm_types = data.get("Data") or []
+
+async def get_geofences(client: httpx.AsyncClient) -> None:
+    """
+    Fetch geofence (SafeZone) definitions and cache them in state.STATE.geofences.
+    """
+    files = {
+        "Token": (None, state.STATE.token or ""),
+        "OperationType": (None, "Query"),
+        "InformationType": (None, "SafeZone"),
+        "LanguageType": (None, config.LANGUAGE_TYPE),
+        "Arguments": (None, '{"SystemNo":"","ZoneName":""}'),
+    }
+    headers = {"Origin": "https://overseetracking.com"}
+
+    resp = await client.post(config.PLATFORM_API_URL, files=files, headers=headers)
+    try:
+        data = resp.json()
+    except Exception:
+        raise RuntimeError(f"Non-JSON SafeZone response: {resp.text[:500]}")
+
+    if str(data.get("State")) != "0":
+        raise RuntimeError(f"Get SafeZone failed: {data}")
+
+    # Cache geofences in state
+    state.STATE.geofences = data.get("Data") or []
+    logger.info(f"Loaded {len(state.STATE.geofences)} geofences")

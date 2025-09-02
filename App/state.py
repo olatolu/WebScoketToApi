@@ -8,5 +8,6 @@ class State:
     ws_tasks: List[asyncio.Task] = []
     vehicle_data: List[Dict[str, Any]] = []
     alarm_types: List[Dict[str, Any]] = []
+    geofences: List[Dict[str, Any]] = []
 
 STATE = State()
