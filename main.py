@@ -28,6 +28,7 @@ logger = logging.getLogger("uvicorn.error")
 # Env / Config
 # -------------------------------------------------
 # Platform API (preprocessing like in webSocket.html)
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 PLATFORM_API_URL = os.getenv("PLATFORM_API_URL", "https://api.overseetracking.com:9090/WebProcessorApi.ashx")
 SOAP_ENDPOINT = os.getenv("SOAP_ENDPOINT", "http://aig-navdb18-064.g.group:8447/ANRML-Live/WS/ANRML/Page/WB_Tracking_API?wsdl")
 PLATFORM_USERNAME = os.getenv("PLATFORM_USERNAME", 'ANRMLOG1')
@@ -53,11 +54,18 @@ HEARTBEAT_SECONDS = int(os.getenv("WS_HEARTBEAT_SECONDS", "20"))
 # -------------------------------------------------
 # Global state
 # -------------------------------------------------
+# -------------------------------------------------
+# Extend State to hold vehicle data
+# -------------------------------------------------
 class State:
     token: Optional[str] = None
-    user_config: Optional[Dict[str, Any]] = None  # includes SessionID, UserName, Password
+    user_config: Optional[Dict[str, Any]] = None
     transfer_endpoints: List[Dict[str, Any]] = []
     ws_tasks: List[asyncio.Task] = []
+    vehicle_data: List[Dict[str, Any]] = []   # from GetMyTracker
+    alarm_types: List[Dict[str, Any]] = []    # from AlarmType query
+
+STATE = State()
 
 STATE = State()
 
@@ -198,19 +206,19 @@ async def platform_sign_in(client: httpx.AsyncClient) -> None:
     STATE.token = data.get("Token")
     STATE.user_config = data.get("Data")  # contains SessionID, UserName, Password, etc.
 
-async def platform_get_my_tracker(client: httpx.AsyncClient) -> None:
-    data = await platform_submit(
-        client,
-        information_type="Product",
-        operation_type="GetMyTracker",
-        arguments={"TrackerType": "0"},
-    )
-    if str(data.get("State")) != "0":
-        raise RuntimeError(f"GetMyTracker failed: {data}")
-
-    public_data = data.get("Data") or {}
-    # Per the HTML, Transfer contains endpoints (IP/ports or WSS domains/ports)
-    STATE.transfer_endpoints = public_data.get("Transfer", []) or []
+# async def platform_get_my_tracker(client: httpx.AsyncClient) -> None:
+#     data = await platform_submit(
+#         client,
+#         information_type="Product",
+#         operation_type="GetMyTracker",
+#         arguments={"TrackerType": "0"},
+#     )
+#     if str(data.get("State")) != "0":
+#         raise RuntimeError(f"GetMyTracker failed: {data}")
+#
+#     public_data = data.get("Data") or {}
+#     # Per the HTML, Transfer contains endpoints (IP/ports or WSS domains/ports)
+#     STATE.transfer_endpoints = public_data.get("Transfer", []) or []
 
 # -------------------------------------------------
 # SOAP push (Create)
@@ -382,3 +390,155 @@ async def health():
         "use_http_ws": USE_HTTP_WS,
         "platform_signed_in": bool(STATE.token),
     }
+
+# -------------------------------------------------
+# Fetch trackers (GetMyTracker)
+# -------------------------------------------------
+async def platform_get_my_tracker(client: httpx.AsyncClient) -> None:
+    """
+    Fetch trackers from the platform and save to state.
+    """
+    data = await platform_submit(
+        client,
+        information_type="Product",
+        operation_type="GetMyTracker",
+        arguments={"TrackerType": "0"},
+    )
+    if str(data.get("State")) != "0":
+        raise RuntimeError(f"GetMyTracker failed: {data}")
+
+    public_data = data.get("Data") or {}
+    STATE.transfer_endpoints = public_data.get("Transfer", []) or []
+    STATE.vehicle_data = public_data.get("Tracker", []) or []   # ✅ save Tracker[] to state
+
+
+# -------------------------------------------------
+# Lookup by SystemNo (with auto-refresh if missing)
+# -------------------------------------------------
+async def get_vehicle_by_system_no(system_no: str) -> Optional[Dict[str, Any]]:
+    """
+    Return vehicle data by SystemNo.
+    Refreshes from GetMyTracker if cache is missing or systemNo not found.
+    """
+    # Try cache first
+    for vehicle in STATE.vehicle_data:
+        if str(vehicle.get("SystemNo")) == str(system_no):
+            return vehicle
+
+    # Not in cache → refresh from API
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=httpx.Timeout(30.0)) as client:
+        await platform_get_my_tracker(client)
+
+    # Try again after refresh
+    for vehicle in STATE.vehicle_data:
+        if str(vehicle.get("SystemNo")) == str(system_no):
+            return vehicle
+
+    return None
+
+@app.get("/vehicle/{system_no}")
+async def vehicle_lookup(system_no: str):
+    vehicle = await get_vehicle_by_system_no(system_no)
+    if not vehicle:
+        return {"error": "SystemNo not found"}
+    return vehicle
+
+# -------------------------------------------------
+# Fetch alarm types
+# -------------------------------------------------
+async def platform_get_alarm_types(client: httpx.AsyncClient) -> None:
+    """
+    Fetch alarm types and cache them in state.
+    """
+    data = await platform_submit(
+        client,
+        information_type="AlarmType",
+        operation_type="Query",
+        arguments={},   # empty
+    )
+    if str(data.get("State")) != "0":
+        raise RuntimeError(f"Get AlarmType failed: {data}")
+
+    # In this API, Data is already a list of alarm objects
+    STATE.alarm_types = data.get("Data") or []
+
+
+# -------------------------------------------------
+# Lookup by AlarmTypeID (with special rule)
+# -------------------------------------------------
+async def get_alarm_type_by_id(alarm_type_id: str) -> Optional[str]:
+    """
+    Return alarm type name by ID.
+    If 'Yaw Alarm' → return 'Deviation Alarm'.
+    Refresh from API if cache is missing or ID not found.
+    """
+    # Try cache first
+    for alarm in STATE.alarm_types:
+        if str(alarm.get("AlarmTypeID")) == str(alarm_type_id):
+            name = alarm.get("Content", "")
+            if name == "Yaw Alarm":
+                return "Deviation Alarm"
+            return name
+
+    # Not in cache → refresh from API
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=httpx.Timeout(30.0)) as client:
+        await platform_get_alarm_types(client)
+
+    for alarm in STATE.alarm_types:
+        if str(alarm.get("AlarmTypeID")) == str(alarm_type_id):
+            name = alarm.get("Content", "")
+            if name == "Yaw Alarm":
+                return "Deviation Alarm"
+            return name
+
+    return None
+
+
+@app.get("/geocode/{lat}/{lon}")
+async def geocode(lat: float, lon: float):
+    """
+    Get human-readable address from latitude and longitude.
+    Example: /geocode/51.5074/-0.1278
+    """
+    address = await reverse_geocode(lat, lon)
+    if not address:
+        return {"error": "Address not found"}
+    return {"lat": lat, "lon": lon, "address": address}
+
+
+
+async def reverse_geocode(lat: float, lon: float) -> Optional[str]:
+    """
+    Convert latitude & longitude into a human-readable address using OpenStreetMap Nominatim.
+    """
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "format": "json",
+    }
+    headers = {
+        "User-Agent": "MyApp/1.0 (your-email@example.com)"  # Nominatim requires identifying UA
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(NOMINATIM_URL, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("display_name")  # full address string
+    except Exception as e:
+        logger.error(f"Reverse geocoding failed: {e}")
+        return None
+
+@app.get("/geocode/{lat}/{lon}")
+async def geocode(lat: float, lon: float):
+    """
+    Get human-readable address from latitude and longitude.
+    Example: /geocode/51.5074/-0.1278
+    """
+    address = await reverse_geocode(lat, lon)
+    if not address:
+        return {"error": "Address not found"}
+    return {"lat": lat, "lon": lon, "address": address}
+
+
+
