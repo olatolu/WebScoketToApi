@@ -1,2 +1,6 @@
 .env
 /__pycache__
+/App/__pycache__
+*.pyc
+*.pyc
+/App/__pycache__

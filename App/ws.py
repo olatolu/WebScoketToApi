@@ -42,7 +42,8 @@ async def run_ws_endpoint(endpoint: dict):
                                 continue
                             try:
                                 data = json.loads(chunk)
-                                if str(data.get("AlarmType", "")) in config.ALLOWED_ALARMS:
+                                alarm_type = str(data.get("AlarmType", "")).strip()
+                                if alarm_type in config.ALLOWED_ALARMS:
                                     logger.info(f"WS ALARM [{host}:{port}]: {json.dumps(data)[:500]}")
                                     await services.push_to_soap(data)
                             except Exception as e:
