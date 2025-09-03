@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+NOMINATIM_URL = "http://47.84.66.152:8080/reverse"
 PLATFORM_API_URL = os.getenv("PLATFORM_API_URL", "https://api.overseetracking.com:9090/WebProcessorApi.ashx")
 SOAP_ENDPOINT = os.getenv("SOAP_ENDPOINT", "http://aig-navdb18-064.g.group:8447/ANRML-Live/WS/ANRML/Page/WB_Tracking_API?wsdl")
 PLATFORM_USERNAME = os.getenv("PLATFORM_USERNAME", "ANRMLOG1")
