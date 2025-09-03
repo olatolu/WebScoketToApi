@@ -40,3 +40,11 @@ async def geofence_name(zone_id: str = Query(..., description="Geofence ZoneID")
     """
     name = await services.get_geofence_name(zone_id)
     return {"ZoneID": zone_id, "ZoneName": name}
+
+@router.get("/route-name")
+async def route_name(route_id: str = Query(..., description="RouteID")):
+    """
+    Get the route name by RouteID.
+    """
+    name = await services.get_route_name(route_id)
+    return {"RouteID": route_id, "RouteName": name}

@@ -9,5 +9,6 @@ class State:
     vehicle_data: List[Dict[str, Any]] = []
     alarm_types: List[Dict[str, Any]] = []
     geofences: List[Dict[str, Any]] = []
+    routes: List[Dict[str, Any]] = []   # ✅ new
 
 STATE = State()

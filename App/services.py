@@ -64,15 +64,36 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
     if alarm_type not in config.ALLOWED_ALARMS:
         return
 
-    alarm_type = str(payload_in.get("AlarmType", "")).strip()
+    # Enrichments (parallelised for speed)
     system_no = payload_in.get("SystemNo")
-    lat, lon = payload_in.get("Latitude"), payload_in.get("Longitude")
+    lat = payload_in.get("Latitude")
+    lon = payload_in.get("Longitude")
 
-    # Enriched fields from utility functions
-    vehicle_no = await get_vehicle_no(system_no) if system_no else None
-    current_location = await get_current_location(lat, lon)
-    alarm_name = await get_alarm_name(alarm_type)
-    geo_fence_name = await get_geofence_name(payload_in.get("GeoFenceID"))
+    vehicle_task = get_vehicle_by_system_no(system_no)
+    location_task = reverse_geocode(lat, lon) if lat and lon else None
+    alarm_name_task = get_alarm_type_by_id(alarm_type)
+
+    # Handle Route/SafeZone specifically
+    related_table = str(payload_in.get("RelatedTable") or "").strip()
+    related_id = payload_in.get("RelatedID")
+
+    geofence_name_task: Optional[asyncio.Future] = None
+    if alarm_type == "17" and related_table == "Route" and related_id:
+        geofence_name_task = get_route_name(related_id)
+    elif related_table == "SafeZone" and related_id:
+        geofence_name_task = get_geofence_name(related_id)
+
+    results = await asyncio.gather(
+        vehicle_task,
+        location_task if location_task else asyncio.sleep(0, result=None),
+        alarm_name_task,
+        geofence_name_task if geofence_name_task else asyncio.sleep(0, result=None),
+    )
+
+    vehicle = results[0] or {}
+    current_location = results[1]
+    alarm_name = results[2]
+    geofence_name = results[3]
 
     payload = {
         "System_No": system_no,
@@ -88,17 +109,17 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
         "Mileage": to_decimal(payload_in.get("Mileage")),
         "Alarm_Type": to_int(alarm_type),
         "Is_Original_Alarm": to_bool(payload_in.get("IsOriginalAlarm")),
+        # Enriched from utility function
+        "Vehicle_No": vehicle.get("Name"),
+        "Current_Location": current_location,
+        "Geo_fence_Name": geofence_name,
+        "Alarm_Name": alarm_name,
         "Arguments": json.dumps({
             "Arguments": payload_in.get("Arguments"),
             "Longitude": payload_in.get("Longitude"),
             "Latitude": payload_in.get("Latitude"),
             "OtherValues": payload_in.get("OtherValues"),
         }, ensure_ascii=False),
-        # Enriched from utility function
-        "Vehicle_No": vehicle_no,
-        "Current_Location": current_location,
-        "Geo_fence_Name": geo_fence_name,
-        "Alarm_Name": alarm_name,
     }
 
     loop = asyncio.get_running_loop()
@@ -168,8 +189,10 @@ async def get_geofence_name(zone_id: str) -> Optional[str]:
     Utility: return ZoneName for a given ZoneID.
     Refresh cache if not found.
     """
+    zone_id = str(zone_id).lower()
+
     for zone in state.STATE.geofences:
-        if str(zone.get("ZoneID")) == str(zone_id):
+        if str(zone.get("ZoneID")).lower() == zone_id:
             return zone.get("ZoneName")
 
     # Not found → refresh SafeZones
@@ -177,10 +200,11 @@ async def get_geofence_name(zone_id: str) -> Optional[str]:
         await platform.get_geofences(client)
 
     for zone in state.STATE.geofences:
-        if str(zone.get("ZoneID")) == str(zone_id):
+        if str(zone.get("ZoneID")).lower() == zone_id:
             return zone.get("ZoneName")
 
     return None
+
 
 async def get_vehicle_no(system_no: str) -> Optional[str]:
     """
@@ -213,3 +237,24 @@ async def get_alarm_name(alarm_type_id: str) -> Optional[str]:
     if not alarm_type_id:
         return None
     return await get_alarm_type_by_id(alarm_type_id)
+
+async def get_route_name(route_id: str) -> Optional[str]:
+    """
+    Utility: return RouteName for a given RouteID.
+    Refresh cache if not found.
+    """
+    route_id = str(route_id).lower()
+
+    for route in state.STATE.routes:
+        if str(route.get("RouteID")) == str(route_id):
+            return route.get("RouteName")
+
+    # Not found → refresh routes
+    async with httpx.AsyncClient(verify=config.VERIFY_SSL, timeout=httpx.Timeout(30.0)) as client:
+        await platform.get_routes(client)
+
+    for route in state.STATE.routes:
+        if str(route.get("RouteID")) == str(route_id):
+            return route.get("RouteName")
+
+    return None

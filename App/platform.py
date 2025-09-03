@@ -64,3 +64,28 @@ async def get_geofences(client: httpx.AsyncClient) -> None:
     # Cache geofences in state
     state.STATE.geofences = data.get("Data") or []
     logger.info(f"Loaded {len(state.STATE.geofences)} geofences")
+
+async def get_routes(client: httpx.AsyncClient) -> None:
+    """
+    Fetch route definitions and cache them in state.STATE.routes.
+    """
+    files = {
+        "Token": (None, state.STATE.token or ""),
+        "OperationType": (None, "Query"),
+        "InformationType": (None, "Route"),
+        "LanguageType": (None, config.LANGUAGE_TYPE),
+        "Arguments": (None, "{}"),
+    }
+    headers = {"Origin": "https://overseetracking.com"}
+
+    resp = await client.post(config.PLATFORM_API_URL, files=files, headers=headers)
+    try:
+        data = resp.json()
+    except Exception:
+        raise RuntimeError(f"Non-JSON Route response: {resp.text[:500]}")
+
+    if str(data.get("State")) != "0":
+        raise RuntimeError(f"Get Route failed: {data}")
+
+    state.STATE.routes = data.get("Data") or []
+    logger.info(f"Loaded {len(state.STATE.routes)} routes")
