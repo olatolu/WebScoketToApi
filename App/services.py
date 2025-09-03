@@ -109,17 +109,14 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
         "Mileage": to_decimal(payload_in.get("Mileage")),
         "Alarm_Type": to_int(alarm_type),
         "Is_Original_Alarm": to_bool(payload_in.get("IsOriginalAlarm")),
-        # Enriched from utility function
+        "Arguments": json.dumps({
+            "Longitude": payload_in.get("Longitude"),
+            "Latitude": payload_in.get("Latitude"),
+        }, ensure_ascii=False),
         "Vehicle_No": vehicle.get("Name"),
         "Current_Location": current_location,
         "Geo_fence_Name": geofence_name,
         "Alarm_Name": alarm_name,
-        "Arguments": json.dumps({
-            "Arguments": payload_in.get("Arguments"),
-            "Longitude": payload_in.get("Longitude"),
-            "Latitude": payload_in.get("Latitude"),
-            "OtherValues": payload_in.get("OtherValues"),
-        }, ensure_ascii=False),
     }
 
     loop = asyncio.get_running_loop()
