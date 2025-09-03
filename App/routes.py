@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from App import state, services, config
 
 router = APIRouter()
@@ -48,3 +48,7 @@ async def route_name(route_id: str = Query(..., description="RouteID")):
     """
     name = await services.get_route_name(route_id)
     return {"RouteID": route_id, "RouteName": name}
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)  # No Content
