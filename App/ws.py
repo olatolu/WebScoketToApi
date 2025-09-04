@@ -21,7 +21,12 @@ async def run_ws_endpoint(endpoint: dict):
     while True:
         try:
             sslopt = False if scheme == "wss" and not config.VERIFY_SSL else None
-            async with websockets.connect(url, ssl=sslopt) as ws:
+            async with websockets.connect(
+                    url,
+                    ssl=sslopt,
+                    ping_interval=None,  # disable internal keepalive
+                    ping_timeout=None
+            ) as ws:
                 await ws.send(cred)
                 logger.info(f"WS connected: {url}")
 

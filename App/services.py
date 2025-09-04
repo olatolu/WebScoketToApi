@@ -162,23 +162,34 @@ async def get_vehicle_by_system_no(system_no: str) -> Optional[Dict[str, Any]]:
 # -------------------------------------------------
 # Alarm type lookup
 # -------------------------------------------------
+
+ALARM_NAME_MAP = {
+    "Yaw Alarm": "Deviation Alarm",
+    "Engine Start Alarm": "Movement Alarm",
+}
+
 async def get_alarm_type_by_id(alarm_type_id: str) -> Optional[str]:
+    """
+    Return alarm type name by ID, with remapping applied.
+    """
+    def remap(name: str) -> str:
+        return ALARM_NAME_MAP.get(name, name)
+
+    # Try cache first
     for alarm in state.STATE.alarm_types:
         if str(alarm.get("AlarmTypeID")) == str(alarm_type_id):
-            name = alarm.get("Content", "")
-            return "Deviation Alarm" if name == "Yaw Alarm" else name
+            return remap(alarm.get("Content", ""))
 
-    async with httpx.AsyncClient(verify=config.VERIFY_SSL, timeout=httpx.Timeout(30.0)) as client:
+    # If not in cache, refresh from API
+    async with httpx.AsyncClient(
+        verify=config.VERIFY_SSL,
+        timeout=httpx.Timeout(30.0)
+    ) as client:
         await platform.get_alarm_types(client)
 
     for alarm in state.STATE.alarm_types:
         if str(alarm.get("AlarmTypeID")) == str(alarm_type_id):
-            name = alarm.get("Content", "")
-            if name == "Yaw Alarm":
-                return "Deviation Alarm"
-            if name == "Engine Start Alarm":
-                return "Movement Alarm"
-            return name
+            return remap(alarm.get("Content", ""))
 
     return None
 
