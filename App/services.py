@@ -97,7 +97,7 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
 
     payload = {
         "System_No": system_no,
-        "Date_x0026_Time": normalize_datetime(payload_in.get("DateTime")),
+        "Date_x0026_Time": _to_xsd_datetime(payload_in.get("DateTime")),
         "Latitude": to_decimal(payload_in.get("Latitude")),
         "Longitude": to_decimal(payload_in.get("Longitude")),
         "Velocity": to_decimal(payload_in.get("Velocity")),
@@ -271,11 +271,21 @@ async def get_route_name(route_id: str) -> Optional[str]:
 
     return None
 
-def normalize_datetime(dt_str: str) -> str:
+from datetime import datetime, timezone, timedelta
+
+def _to_xsd_datetime(val: str) -> Optional[datetime]:
     """
-    Convert 'YYYY-MM-DD HH:MM:SS' into 'YYYY-MM-DDTHH:MM:SS'
-    for xsd:dateTime compliance.
+    Convert 'YYYY-MM-DD HH:MM:SS' to timezone-aware datetime in UTC+1.
+    If input already looks ISO8601-like, keep it.
     """
-    if dt_str and " " in dt_str and "T" not in dt_str:
-        return dt_str.replace(" ", "T")
-    return dt_str
+    if not val:
+        return None
+    try:
+        if "T" in val:  # already ISO-like
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            return dt
+        # Parse and force UTC+1
+        local_dt = datetime.strptime(val, "%Y-%m-%d %H:%M:%S")
+        return local_dt.replace(tzinfo=timezone(timedelta(hours=1)))
+    except Exception:
+        return None
