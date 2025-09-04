@@ -97,7 +97,7 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
 
     payload = {
         "System_No": system_no,
-        "Date_x0026_Time": to_xsd_datetime(payload_in.get("DateTime")),
+        "Date_x0026_Time": payload_in.get("DateTime"),
         "Latitude": to_decimal(payload_in.get("Latitude")),
         "Longitude": to_decimal(payload_in.get("Longitude")),
         "Velocity": to_decimal(payload_in.get("Velocity")),
@@ -174,7 +174,11 @@ async def get_alarm_type_by_id(alarm_type_id: str) -> Optional[str]:
     for alarm in state.STATE.alarm_types:
         if str(alarm.get("AlarmTypeID")) == str(alarm_type_id):
             name = alarm.get("Content", "")
-            return "Deviation Alarm" if name == "Yaw Alarm" else name
+            if name == "Yaw Alarm":
+                return "Deviation Alarm"
+            if name == "Engine Start Alarm":
+                return "Movement Alarm"
+            return name
 
     return None
 
