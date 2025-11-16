@@ -121,11 +121,16 @@ async def push_to_soap(payload_in: Dict[str, Any]) -> None:
 
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(None, lambda: soap.SOAP_CLIENT.Create(WB_Tracking_API=payload))
+        from App import soap
+        soap_client = soap.get_soap_client()
+        result = await loop.run_in_executor(None, lambda: soap_client.Create(WB_Tracking_API=payload))
         logger.info(f"SOAP Create OK: {result}")
     except Exception as e:
         logger.error(f"SOAP Create failed: {e}")
         logger.error(f"Payload: {payload}")
+        # Reset client so it reconnects on next attempt
+        from App import soap
+        soap.reset_soap_client()
 
 # -------------------------------------------------
 # Reverse geocoding
